@@ -6,7 +6,7 @@ from numpy.random import randint
 from keras.optimizers import Adam
 from keras.initializers import RandomNormal
 from keras.models import Model, Input
-from keras.layers import Conv2D, Conv2DTranspose, LeakyReLU, Activation, Concatenate, Dropout, BatchNormalization
+from keras.layers import Conv2D, Conv2DTranspose, LeakyReLU, Activation, Concatenate, Dropout, BatchNormalization, Embedding, Reshape, Dense
 from keras.preprocessing.image import img_to_array, load_img
 from matplotlib import pyplot
 
@@ -47,9 +47,9 @@ print("Saved dataset: ", filename)
 """
 
 #load dataset
-data = load("_datasets\\_radiance1\\rad_256.npz")
-src_images, tar_images = data["arr_0"], data["arr_1"]
-print("Loaded: ", src_images.shape, tar_images.shape)
+data = load("_datasets\\_radiancev2\\rad_256.npz")
+src_images, tar_images, longtitude = data["arr_0"], data["arr_1"], data["arr_2"]
+print("Loaded: ", src_images.shape, tar_images.shape, longtitude.shape)
 #print source images
 n_samples = 3
 for i in range(n_samples):
@@ -61,6 +61,7 @@ for i in range(n_samples):
     pyplot.subplot(2, n_samples, 1 + n_samples + i)
     pyplot.axis("off")
     pyplot.imshow(tar_images[i].astype("uint8"))
+    pyplot.title(str(longtitude[i]))
 
 pyplot.show()
 
@@ -69,15 +70,24 @@ pyplot.show()
 ####
 
 #define the discriminator model
-def define_discriminator(image_shape):
+def define_discriminator(image_shape, n_classes=3):
     #weight initialization
     init = RandomNormal(stddev=0.02)
     #source image input
     in_src_image = Input(shape=image_shape)
     #target image input
     in_target_image = Input(shape =image_shape)
+    #longtitude label input
+    longtitude = Input(shape=(1,))
+    #embedding later
+    em = Embedding(n_classes, 30)(longtitude)
+    # scale up to image dimensions with linear activation
+    n_nodes = image_shape[0] * image_shape[1] * 3
+    em = Dense(n_nodes)(em)
+    # reshape to additional channel
+    em = Reshape((image_shape[0], image_shape[1], 3))(em)
     #concatenate images channel-wise
-    merged = Concatenate()([in_src_image, in_target_image])
+    merged = Concatenate()([in_src_image, in_target_image, em])
     #C64
     d = Conv2D(64, (4,4), strides=(2,2), padding="same", kernel_initializer=init)(merged)
     d = LeakyReLU(alpha=0.2)(d)
@@ -101,7 +111,7 @@ def define_discriminator(image_shape):
     d = Conv2D(1, (4,4), padding="same", kernel_initializer=init)(d)
     patch_out = Activation("sigmoid")(d)
     #define model
-    model = Model([in_src_image, in_target_image], patch_out)
+    model = Model([in_src_image, in_target_image, longtitude], patch_out)
     #compile model
     opt = Adam(lr=0.0002, beta_1=0.5)
     model.compile(loss="binary_crossentropy", optimizer=opt, loss_weights=[0.5])
@@ -138,13 +148,24 @@ def decoder_block(layer_in, skip_in, n_filters, dropout=True):
     return g
 
 #define standalone generator model
-def define_generator(image_shape=(256, 256, 3)):
+def define_generator(image_shape=(256, 256, 3), n_classes=3):
     #weight initialization
     init = RandomNormal(stddev=0.02)
+    #longtitude label input
+    longtitude = Input(shape=(1,))
+    #embedding later
+    em = Embedding(n_classes, 30)(longtitude)
+    # scale up to image dimensions with linear activation
+    n_nodes = image_shape[0] * image_shape[1] * 3
+    em = Dense(n_nodes)(em)
+    # reshape to additional channel
+    em = Reshape((image_shape[0], image_shape[1], 3))(em)
     #image input
     in_image = Input(shape=image_shape)
+    #concentanate inputs
+    merged = Concatenate()([in_image, em])
     #encoder model
-    e1 = define_encoder_block(in_image, 64, batchnorm=False)
+    e1 = define_encoder_block(merged, 64, batchnorm=False)
     e2 = define_encoder_block(e1, 128)
     e3 = define_encoder_block(e2, 256)
     e4 = define_encoder_block(e3, 512)
@@ -166,7 +187,7 @@ def define_generator(image_shape=(256, 256, 3)):
     g = Conv2DTranspose(3, (4,4), strides =(2,2), padding="same", kernel_initializer=init)(d7)
     out_image = Activation("tanh")(g)
     #define model
-    model = Model(in_image, out_image)
+    model = Model([in_image, longtitude], out_image)
     return model
 
 def define_gan(g_model, d_model, image_shape):
@@ -174,15 +195,17 @@ def define_gan(g_model, d_model, image_shape):
     d_model.trainable = False
     #define source image
     in_src = Input(shape=image_shape)
+    #define source longtitude
+    longtitude = Input(shape=(1,))
     #connect the source image to the generator input
-    gen_out = g_model(in_src)
+    gen_out = g_model([in_src, longtitude])
     #connect the source input and generator output to the discriminator input
-    dis_out = d_model([in_src, gen_out])
+    dis_out = d_model([in_src, gen_out, longtitude])
     #src image as input, generated image and classification output
-    model = Model(in_src, [dis_out, gen_out])
+    model = Model([in_src, longtitude], [dis_out, gen_out])
     #compile model
     opt = Adam(lr=0.0002, beta_1=0.5)
-    model.compile(loss=["binary_crossentropy", "mae"], optimizer=opt, loss_weights=[1,100])
+    model.compile(loss=["binary_crossentropy", "mae", "binary_crossentropy"], optimizer=opt, loss_weights=[1,100, 1])
     return model
 
 #load and prepare training images
@@ -190,28 +213,28 @@ def load_real_samples(filename):
     #load the compressed arrays
     data = load(filename)
     #unpack the arrays
-    X1, X2 = data["arr_0"], data["arr_1"]
+    X1, X2, X3 = data["arr_0"], data["arr_1"], data["arr_2"]
     #scale from [0,255] to [-1,1]
     X1 = (X1 - 127.5) / 127.5
     X2 = (X2 - 127.5) / 127.5
-    return[X1, X2]
+    return[X1, X2, X3]
 
 #select a batch of random samples, returns images and target
 def generate_real_samples(dataset, n_samples, patch_shape):
     #unpack dataset
-    trainA, trainB = dataset
+    trainA, trainB, trainC = dataset
     #choose random instances
     ix = randint(0, trainA.shape[0], n_samples)
     #retrieve selected images
-    X1, X2 = trainA[ix], trainB[ix]
+    X1, X2, X3 = trainA[ix], trainB[ix], trainC[ix]
     #generate "real" class labels (1)
     y = ones((n_samples, patch_shape, patch_shape, 1))
-    return [X1, X2], y
+    return [X1, X2, X3], y
 
 #generate a batch of images, returns images and targets
-def generate_fake_samples(g_model, samples, patch_shape):
+def generate_fake_samples(g_model, samples, patch_shape, longtitude):
     #generate fake instance
-    X = g_model.predict(samples)
+    X = g_model.predict([samples, longtitude])
     #create "fake" class labels (0)
     y = zeros((len(X), patch_shape, patch_shape, 1))
     return X, y
@@ -223,9 +246,9 @@ def generate_fake_samples(g_model, samples, patch_shape):
 #generate samples and save as a plot and save the model
 def summarize_performance(step, g_model, dataset, n_samples=3):
     #select a sample of input images
-    [X_realA, X_realB], _ = generate_real_samples(dataset, n_samples, 1)
+    [X_realA, X_realB, X_realC], _ = generate_real_samples(dataset, n_samples, 1)
     #generate a batch of fake samples
-    X_fakeB, _ = generate_fake_samples(g_model, X_realA, 1)
+    X_fakeB, _ = generate_fake_samples(g_model, X_realA, 1, X_realC)
     #scale all pixels from [-1,1] to [0,1]
     X_realA = (X_realA + 1) / 2.0
     X_realB = (X_realB + 1) / 2.0
@@ -245,12 +268,13 @@ def summarize_performance(step, g_model, dataset, n_samples=3):
         pyplot.subplot(3, n_samples, 1 + n_samples*2 + i)
         pyplot.axis("off")
         pyplot.imshow(X_realB[i])
+        pyplot.title(str(X_realC[i]))
     #save plot to file
-    filename1 = "__ganResults\\radiance1\\plot_%06d.png" % (step + 1)
+    filename1 = "__ganResults\\radiancev2\\plot_%06d.png" % (step + 1)
     pyplot.savefig(filename1)
     pyplot.close()
     #save the generator model
-    filename2 = "_models\\_radiance1\\model%06d.h5" % (step + 1)
+    filename2 = "_models\\_radiancev2\\model%06d.h5" % (step + 1)
     g_model.save(filename2)
     print(">Saved: %s and %s" % (filename1, filename2))
     
@@ -263,7 +287,7 @@ def train(d_model, g_model, gan_model, dataset, n_epochs=100, n_batch=1):
     #determine the output square shape of the discriminator
     n_patch = d_model.output_shape[1]
     #unpack dataset
-    trainA, trainB = dataset
+    trainA, trainB, trainC = dataset
     #calculate the number of batches per training epoch
     bat_per_epo = int(len(trainA) / n_batch)
     #calculate the number of training iterations
@@ -271,19 +295,19 @@ def train(d_model, g_model, gan_model, dataset, n_epochs=100, n_batch=1):
     #manually enumerate epochs
     for i in range(n_steps):
         #select a batch of real samples
-        [X_realA, X_realB], y_real = generate_real_samples(dataset, n_batch, n_patch)
+        [X_realA, X_realB, X_realC], y_real = generate_real_samples(dataset, n_batch, n_patch)
         # generate a batch of fake samples
-        X_fakeB, y_fake = generate_fake_samples(g_model, X_realA, n_patch)
+        X_fakeB, y_fake = generate_fake_samples(g_model, X_realA, n_patch, X_realC)
         # update discriminator for real samples
-        d_loss1 = d_model.train_on_batch([X_realA, X_realB], y_real)
+        d_loss1 = d_model.train_on_batch([X_realA, X_realB, X_realC], y_real)
         # update discriminator for generated samples
-        d_loss2 = d_model.train_on_batch([X_realA, X_fakeB], y_fake)
+        d_loss2 = d_model.train_on_batch([X_realA, X_fakeB, X_realC], y_fake)
         # update the generator
-        g_loss, _, _ = gan_model.train_on_batch(X_realA, [y_real, X_realB])
+        g_loss, _, _ = gan_model.train_on_batch([X_realA, X_realC], [y_real, X_realB])
         # summarize performance
         print(">%d, d1[%.3f] d2[%.3f] g[%.3f]" % (i+1, d_loss1, d_loss2, g_loss))
         # summarize model performance
-        if (i+1) % (bat_per_epo * 2) == 0:
+        if (i+1) % (bat_per_epo * 1) == 0:
             summarize_performance(i, g_model, dataset)
             
 ####
@@ -291,8 +315,8 @@ def train(d_model, g_model, gan_model, dataset, n_epochs=100, n_batch=1):
 ####
 
 # load image data
-dataset = load_real_samples("_datasets\\_radiance1\\rad_256.npz")
-print("Loaded ", dataset[0].shape, dataset[1].shape)
+dataset = load_real_samples("_datasets\\_radiancev2\\rad_256.npz")
+print("Loaded ", dataset[0].shape, dataset[1].shape, dataset[2].shape)
 
 # define input shape based on the loaded dataset
 image_shape = dataset[0].shape[1:]
