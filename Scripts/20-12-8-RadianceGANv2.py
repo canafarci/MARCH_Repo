@@ -10,6 +10,10 @@ from keras.layers import Conv2D, Conv2DTranspose, LeakyReLU, Activation, Concate
 from keras.preprocessing.image import img_to_array, load_img
 from matplotlib import pyplot
 
+gpus = tf.config.experimental.list_physical_devices(device_type='GPU')
+for gpu in gpus:
+    tf.config.experimental.set_memory_growth(gpu, True)
+
 PATH = "C:\_Thesis\VirtualEnv\_datasets\_radiance1"
 print (PATH)
  
