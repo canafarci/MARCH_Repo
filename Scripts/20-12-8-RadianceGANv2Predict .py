@@ -5,6 +5,10 @@ from keras.preprocessing.image import img_to_array, load_img
 import tensorflow as tf
 import numpy as np
 
+gpus = tf.config.experimental.list_physical_devices(device_type='GPU')
+for gpu in gpus:
+    tf.config.experimental.set_memory_growth(gpu, True)
+    
 #load and prepare training images
 def load_image(filename, size=(256,256)):
     #load image with the preferred size

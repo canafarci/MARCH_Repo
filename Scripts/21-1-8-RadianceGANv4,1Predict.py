@@ -1,5 +1,5 @@
 from keras.models import load_model
-from numpy import expand_dims, vstack, asarray, count_nonzero, sum, squeeze
+from numpy import expand_dims, vstack, asarray, count_nonzero, sum, squeeze, hstack
 from matplotlib import pyplot
 from keras.preprocessing.image import img_to_array, load_img
 import tensorflow as tf
@@ -11,6 +11,14 @@ gpus = tf.config.experimental.list_physical_devices(device_type='GPU')
 for gpu in gpus:
     tf.config.experimental.set_memory_growth(gpu, True)
 
+#### LAT, GHI LIST
+
+
+brisbane_loc = [-27.38, 88200.0]
+nairobi_loc = [-1.28, 107400.0]
+cairo_loc = [30.03, 63200.0]
+ankara_loc = [39.90, 36100.0]
+london_loc  = [51.50, 13800.0]
 
 #load and prepare training images
 def load_image(filename, size=(256,256)):
@@ -25,7 +33,7 @@ def load_image(filename, size=(256,256)):
     return pixels
 
 #load model
-model = load_model("C:\\_Thesis\VirtualEnv\\_models\\_radiancev3" + "\\50.h5")
+model = load_model("C:\\_Thesis\VirtualEnv\\_models\\_radiancev4" + "\\6.h5", compile=False)
 
 def plot_images(src_img, gen_img, tar_img, error):
     images = vstack((src_img, gen_img, tar_img))
@@ -47,14 +55,14 @@ def plot_images(src_img, gen_img, tar_img, error):
             pyplot.title(titles[i])
     pyplot.show()
     
-def convert_lon_and_predict(image_int, longtitude):
+def convert_loc_and_predict(image_int, longtitude):
     longtitude = asarray(longtitude)
     longtitude = expand_dims(longtitude, 0)
     longtitude = longtitude.astype("float32")
     #load source image
     imagestring = str(image_int) + ".png"
-    src_image = load_image("C:\\_Thesis\VirtualEnv\\_datasets\\_radiancev3\\test\\source\\" + imagestring)
-    tar_image = load_image("C:\\_Thesis\VirtualEnv\\_datasets\\_radiancev3\\test\\target\\" + imagestring)
+    src_image = load_image("C:\\_Thesis\VirtualEnv\\_datasets\\_radiancev4\\test\\source\\" + imagestring)
+    tar_image = load_image("C:\\_Thesis\VirtualEnv\\_datasets\\_radiancev4\\test\\target\\" + imagestring)
     #generate from source
     gen_image = model.predict([src_image, longtitude])
     #calculate error
@@ -97,22 +105,31 @@ def percentage_error(imageA, imageB):
     percentage_difference = abs_difference / 255.0
     total_percentage_difference = np.sum(percentage_difference) / (256 * 256) """
     #get all white pixels
-    for i in range(0,255):
-        for j in range(0,255): 
+    for i in range(0,256):
+        for j in range(0,256): 
             if np.array_equal(imageB[i, j], [255.0, 255.0, 255.0]):
                 pass
             else:
-                print(imageB[i, j])
-                print(imageA[i, j])
-                difference = imageA[i, j] - imageB[i, j]
-                abs_difference = np.abs(difference)
-                percentage_difference = abs_difference / 255.0 * 100
-                total_pixel_difference = np.sum(percentage_difference) / (3)
-                difference_value_list.append(total_pixel_difference)
+                hue_difference = calculate_percentage(imageA, imageB, i, j)
+                difference_value_list.append(hue_difference)
                 k += 1
-    total_percentage_difference = sum(difference_value_list) / (k)
-    return total_percentage_difference
+    total_hue_difference = sum(difference_value_list) / (k)
+    return total_hue_difference
 
+def calculate_percentage(imageA, imageB, i, j):
+    print(imageB[i, j])
+    print(imageA[i, j])
+    hsv1 = rgb_to_hsv(imageA[i, j, 0], imageA[i, j, 1], imageA[i, j, 2])
+    hsv2 = rgb_to_hsv(imageB[i, j, 0], imageB[i, j, 1], imageB[i, j, 2])
+    print(hsv1)
+    print(hsv2)
+    h1 = hsv1[0]
+    h2 = hsv2[0]
+    difference = h2 - h1
+    abs_difference = abs(difference)
+    hue_difference = abs_difference / 360.0 * 100
+    return hue_difference
+    
 def compare_images(imageA, imageB):
     # compute the mean squared error and structural similarity
     # index for the images
@@ -122,4 +139,25 @@ def compare_images(imageA, imageB):
     s = metrics.structural_similarity(imageA, imageB)
     return m, s
 
-convert_lon_and_predict(3, 3)
+def rgb_to_hsv(r, g, b):
+    r, g, b = r/255.0, g/255.0, b/255.0
+    mx = max(r, g, b)
+    mn = min(r, g, b)
+    df = mx-mn
+    if mx == mn:
+        h = 0
+    elif mx == r:
+        h = (60 * ((g-b)/df) + 360) % 360
+    elif mx == g:
+        h = (60 * ((b-r)/df) + 120) % 360
+    elif mx == b:
+        h = (60 * ((r-g)/df) + 240) % 360
+    if mx == 0:
+        s = 0
+    else:
+        s = (df/mx)*100
+    v = mx*100
+    return h, s, v
+
+convert_loc_and_predict(2, 2)
+
